@@ -1,104 +1,82 @@
-import os
-import json
+"""Agrega os dados da camada Silver e produz a camada Gold."""
+
+from __future__ import annotations
+
 import csv
+import json
+from collections import Counter
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
-# 1. Definir caminhos das pastas do Data Lake
-PASTA_SILVER = "./datalake/silver/"
-PASTA_GOLD = "./datalake/gold/"
 
-# Garantir que a pasta Gold existe
-os.makedirs(PASTA_GOLD, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+PASTA_SILVER = BASE_DIR / "datalake" / "silver"
+PASTA_GOLD = BASE_DIR / "datalake" / "gold"
 
-def calcular_distribuicao(dados, chave):
-    """Calcula a distribuição (contagem) de uma determinada chave nos dados"""
-    distribuicao = {}
-    for item in dados:
-        valor = item.get(chave)
-        if valor:
-            distribuicao[valor] = distribuicao.get(valor, 0) + 1
-        else:
-            distribuicao["Não Informado"] = distribuicao.get("Não Informado", 0) + 1
-    
-    # Ordenar por contagem decrescente
-    return dict(sorted(distribuicao.items(), key=lambda x: x[1], reverse=True))
 
-def processar_camada_gold():
+def calcular_distribuicao(
+    dados: list[dict[str, str]], chave: str
+) -> dict[str, int]:
+    """Calcula uma distribuição em ordem decrescente de frequência."""
+    contagem = Counter((item.get(chave) or "Não Informado").strip() for item in dados)
+    return dict(sorted(contagem.items(), key=lambda item: (-item[1], item[0])))
+
+
+def processar_camada_gold(
+    pasta_silver: Path = PASTA_SILVER,
+    pasta_gold: Path = PASTA_GOLD,
+) -> int:
+    """Gera métricas Gold a partir do CSV consolidado da Silver."""
     print("Iniciando processamento da Camada Gold...")
-    
-    caminho_csv_silver = os.path.join(PASTA_SILVER, "consolidado_ceps.csv")
-    
-    if not os.path.exists(caminho_csv_silver):
-        print(f"Erro: Arquivo consolidado da camada Silver não encontrado em: {caminho_csv_silver}")
-        print("Certifique-se de executar o script 'processamento_silver.py' primeiro.")
-        return
-        
-    # Ler os dados consolidados da Silver
-    dados_silver = []
-    with open(caminho_csv_silver, "r", encoding="utf-8") as f:
-        leitor = csv.DictReader(f)
-        for linha in leitor:
-            dados_silver.append(linha)
-            
+    caminho_csv = pasta_silver / "consolidado_ceps.csv"
+    if not caminho_csv.is_file():
+        print(f"Erro: arquivo Silver não encontrado em {caminho_csv}")
+        return 0
+
+    with caminho_csv.open("r", encoding="utf-8-sig", newline="") as arquivo_csv:
+        dados_silver = list(csv.DictReader(arquivo_csv))
     if not dados_silver:
-        print("Nenhum dado encontrado no arquivo consolidado da camada Silver.")
-        return
-        
-    total_ceps = len(dados_silver)
-    print(f"Processando métricas sobre {total_ceps} CEP(s) cadastrados.")
-    
-    # 2. Calcular agregados de negócio
-    dist_regiao = calcular_distribuicao(dados_silver, "regiao")
-    dist_uf = calcular_distribuicao(dados_silver, "uf")
-    dist_cidade = calcular_distribuicao(dados_silver, "localidade")
-    dist_ddd = calcular_distribuicao(dados_silver, "ddd")
-    
-    # 3. Montar o relatório consolidado de métricas (Gold standard)
-    relatorio_gold = {
+        print("Nenhum dado encontrado no arquivo consolidado da Silver.")
+        return 0
+
+    metricas = {
+        "distribuicao_por_regiao": calcular_distribuicao(dados_silver, "regiao"),
+        "distribuicao_por_estado": calcular_distribuicao(dados_silver, "uf"),
+        "distribuicao_por_cidade": calcular_distribuicao(dados_silver, "localidade"),
+        "distribuicao_por_ddd": calcular_distribuicao(dados_silver, "ddd"),
+    }
+    relatorio: dict[str, Any] = {
         "metadata": {
-            "data_geracao_relatorio": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_geracao_relatorio": datetime.now().isoformat(
+                sep=" ", timespec="seconds"
+            ),
             "fonte_dados": "datalake/silver/consolidado_ceps.csv",
-            "total_registros_analisados": total_ceps
+            "total_registros_analisados": len(dados_silver),
         },
-        "metricas": {
-            "distribuicao_por_regiao": dist_regiao,
-            "distribuicao_por_estado": dist_uf,
-            "distribuicao_por_cidade": dist_cidade,
-            "distribuicao_por_ddd": dist_ddd
-        }
+        "metricas": metricas,
     }
-    
-    # 4. Salvar arquivos de saída na camada Gold
-    # Salvar relatório consolidado completo
-    caminho_relatorio = os.path.join(PASTA_GOLD, "relatorio_metricas.json")
-    with open(caminho_relatorio, "w", encoding="utf-8") as f:
-        json.dump(relatorio_gold, f, ensure_ascii=False, indent=4)
-    print(f"Relatório completo salvo em: {caminho_relatorio}")
-    
-    # Salvar métricas separadas em arquivos específicos para consumo rápido de APIs ou dashboards
-    arquivos_metricas = {
-        "distribuicao_regiao.json": dist_regiao,
-        "distribuicao_uf.json": dist_uf,
-        "distribuicao_cidade.json": dist_cidade,
-        "distribuicao_ddd.json": dist_ddd
+
+    pasta_gold.mkdir(parents=True, exist_ok=True)
+    saidas = {
+        "relatorio_metricas.json": relatorio,
+        "distribuicao_regiao.json": metricas["distribuicao_por_regiao"],
+        "distribuicao_uf.json": metricas["distribuicao_por_estado"],
+        "distribuicao_cidade.json": metricas["distribuicao_por_cidade"],
+        "distribuicao_ddd.json": metricas["distribuicao_por_ddd"],
     }
-    
-    for nome_arquivo, dados_metrica in arquivos_metricas.items():
-        caminho_arquivo = os.path.join(PASTA_GOLD, nome_arquivo)
-        with open(caminho_arquivo, "w", encoding="utf-8") as f:
-            json.dump(dados_metrica, f, ensure_ascii=False, indent=4)
-        print(f"Métrica salva em: {caminho_arquivo}")
-        
-    print("\n--- RESUMO DOS DADOS (GOLD) ---")
-    print(f"Total de CEPs Processados: {total_ceps}")
-    print("\nDistribuição por Região:")
-    for reg, qtd in dist_regiao.items():
-        print(f" - {reg}: {qtd} ({qtd/total_ceps*100:.1f}%)")
-    print("\nDistribuição por Estado:")
-    for uf, qtd in dist_uf.items():
-        print(f" - {uf}: {qtd} ({qtd/total_ceps*100:.1f}%)")
-    print("--------------------------------\n")
-    print("Processamento da Camada Gold finalizado com sucesso!")
+    for nome_arquivo, conteudo in saidas.items():
+        (pasta_gold / nome_arquivo).write_text(
+            json.dumps(conteudo, ensure_ascii=False, indent=4), encoding="utf-8"
+        )
+
+    print(f"Camada Gold concluída para {len(dados_silver)} CEP(s).")
+    return len(dados_silver)
+
+
+def main() -> int:
+    return 0 if processar_camada_gold() > 0 else 1
+
 
 if __name__ == "__main__":
-    processar_camada_gold()
+    raise SystemExit(main())

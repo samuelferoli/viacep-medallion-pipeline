@@ -1,4 +1,5 @@
 cep,logradouro,complemento,unidade,bairro,localidade,uf,estado,regiao,ibge,gia,ddd,siafi,metadata_arquivo_origem,metadata_data_extracao,metadata_data_processamento
-01001000,Praça da Sé,lado ímpar,,Sé,São Paulo,SP,São Paulo,Sudeste,3550308,1004,11,7107,dados_cep_20260630_154459.json,2026-06-30 15:44:59,2026-07-03 13:34:10
-20550017,Rua São Francisco Xavier,de 691 ao fim - lado ímpar,,São Francisco Xavier,Rio de Janeiro,RJ,Rio de Janeiro,Sudeste,3304557,,21,6001,dados_cep_20260702_112142.json,2026-07-02 11:21:42,2026-07-03 13:34:10
-23050102,Avenida Cesário de Melo,de 2840 a 4266 - lado par,,Campo Grande,Rio de Janeiro,RJ,Rio de Janeiro,Sudeste,3304557,,21,6001,dados_cep_20260703_133334.json,2026-07-03 13:33:34,2026-07-03 13:34:10
+01001000,Praça da Sé,lado ímpar,,Sé,São Paulo,SP,São Paulo,Sudeste,3550308,1004,11,7107,dados_cep_20260630_154459.json,2026-06-30 15:44:59,2026-08-19 16:27:14
+20520053,Rua Conde de Bonfim,até 0186 - lado par,,Tijuca,Rio de Janeiro,RJ,Rio de Janeiro,Sudeste,3304557,,21,6001,dados_cep_20260713_131918.json,2026-07-13 13:19:18,2026-08-19 16:27:14
+20550017,Rua São Francisco Xavier,de 691 ao fim - lado ímpar,,São Francisco Xavier,Rio de Janeiro,RJ,Rio de Janeiro,Sudeste,3304557,,21,6001,dados_cep_20260702_112142.json,2026-07-02 11:21:42,2026-08-19 16:27:14
+23050102,Avenida Cesário de Melo,de 2840 a 4266 - lado par,,Campo Grande,Rio de Janeiro,RJ,Rio de Janeiro,Sudeste,3304557,,21,6001,dados_cep_20260703_133334.json,2026-07-03 13:33:34,2026-08-19 16:27:14

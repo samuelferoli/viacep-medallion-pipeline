@@ -1,62 +1,120 @@
-# ExtractionAPI Dashboard
+# Pipeline Medallion de CEPs
 
-Pipeline de dados em camadas (medallion: **Bronze → Silver → Gold**) que extrai
-endereços de CEP da API pública [ViaCEP](https://viacep.com.br/), processa, agrega métricas
-e serve um dashboard local.
+Pipeline de dados em Python que consulta a API pública
+[ViaCEP](https://viacep.com.br/), preserva os dados brutos, realiza limpeza e
+deduplicação, calcula métricas analíticas e disponibiliza um dashboard local.
 
 ## Arquitetura
 
-```
-extracao_bronze.py        →   Camada Bronze    (dados brutos da API, arquivados por timestamp)
-processamento_silver.py   →   Camada Silver    (limpeza, padronização, linhagem, dedup por CEP)
-processamento_gold.py    →   Camada Gold      (agregados: distribuição por região/UF/cidade/ddd)
-dashboard_server.py      →   Servidor HTTP    (serve o dashboard + arquivos do datalake)
-index.html               →   Dashboard        (Chart.js, tabela Silver, métricas Gold)
+```mermaid
+flowchart LR
+    A[ViaCEP] --> B[Bronze<br/>JSON bruto por extração]
+    B --> C[Silver<br/>limpeza, linhagem e deduplicação]
+    C --> D[Gold<br/>métricas por região, UF, cidade e DDD]
+    C --> E[Dashboard]
+    D --> E
 ```
 
-Os dados são persistidos em `./datalake/`:
+| Componente | Responsabilidade |
+|---|---|
+| `extracao_bronze.py` | Valida e consulta CEPs, com timeout e tratamento de falhas |
+| `processamento_silver.py` | Limpa, padroniza, adiciona linhagem e mantém o CEP mais recente |
+| `processamento_gold.py` | Gera distribuições agregadas para análise |
+| `pipeline.py` | Executa Bronze → Silver → Gold em um único comando |
+| `dashboard_server.py` | Serve localmente somente o dashboard e os dados necessários |
+| `index.html` | Exibe métricas, gráficos, busca, tabela e detalhes dos CEPs |
 
-- `datalake/bronze/`  — JSON bruto por execução (`dados_cep_YYYYMMDD_HHMMSS.json`)
-- `datalake/silver/`  — JSON limpo por CEP (`cep_XXXXX.json`) + `consolidado_ceps.csv`
-- `datalake/gold/`    — métricas agregadas (`relatorio_metricas.json` e um por dimensão)
+Os dados são organizados em `datalake/bronze`, `datalake/silver` e
+`datalake/gold`. O repositório contém uma pequena amostra demonstrativa para que
+o dashboard possa ser aberto logo após a instalação.
+
+## Principais características
+
+- arquitetura Medallion com separação clara entre dados brutos e derivados;
+- validação de CEP e tratamento de timeout, HTTP e JSON inválido;
+- nomes de arquivo sem colisão, com timestamp até microssegundos;
+- processamento Silver idempotente e deduplicação pelo evento mais recente;
+- metadados de origem, extração e processamento;
+- suporte à evolução de campos retornados pela API;
+- servidor restrito a `127.0.0.1`, sem exposição dos demais arquivos do projeto;
+- testes unitários e integrados executados também no GitHub Actions.
 
 ## Pré-requisitos
 
-- Python 3.10+ (desenvolvido/testado com 3.14)
+- Python 3.10 ou superior
 
 ## Instalação
 
 ```bash
-python -m venv venv
+python -m venv .venv
 
 # Linux/macOS
-source venv/bin/activate
-# Windows (PowerShell)
-venv\Scripts\Activate.ps1
+source .venv/bin/activate
 
-pip install -r requirements.txt
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+
+python -m pip install -r requirements.txt
 ```
 
-> Observação: o `requirements.txt` **deve** estar em UTF-8 (sem BOM). Em sistemas
-> que compartilham com Linux/Docker, evite gerá-lo com `Out-File` no PowerShell,
-> que usa UTF-16 por padrão. Prefira:
-> `pip freeze > requirements.txt` (cmd) ou `{ pip freeze } | Set-Content requirements.txt -Encoding utf8`.
+## Execução rápida
 
-## Execução (nesta ordem)
+Consulte um CEP e processe todas as camadas:
 
 ```bash
-python extracao_bronze.py       # 1. Extrai um CEP da API ViaCEP para a camada Bronze
-python processamento_silver.py # 2. Limpa, padroniza e deduplica → Silver
-python processamento_gold.py   # 3. Calcula agregados → Gold
-python dashboard_server.py     # 4. Sobe o servidor e abre http://localhost:8000
+python pipeline.py --cep 01001000
 ```
 
-## Notas
+Consulte vários CEPs na mesma execução:
 
-- Atualmente a Bronze extrai um único CEP fixo em `extracao_bronze.py`. Para escalar,
-  substitua a constante `url_api` por uma iteração sobre uma lista/CSV de CEPs.
-- O reprocessamento da Silver é idempotente quanto ao conjunto: a cada execução
-  ela lê toda a Bronze e mantém o registro mais recente por CEP (deduplicação
-  por data de extração embutida no nome do arquivo).
-- O `dashboard_server.py` serve o diretório raiz; em ambientes compartilhados,
-  considere restringir para `index.html` + `datalake/`.
+```bash
+python pipeline.py --cep 01001000 --cep 20040002 --cep 30140071
+```
+
+Reprocesse apenas os arquivos que já existem na Bronze, sem acessar a API:
+
+```bash
+python pipeline.py --somente-processar
+```
+
+Inicie o dashboard:
+
+```bash
+python dashboard_server.py
+```
+
+A aplicação abre `http://127.0.0.1:8000`. Para impedir a abertura automática
+do navegador ou escolher outra porta, use:
+
+```bash
+python dashboard_server.py --sem-navegador --porta 8080
+```
+
+Os scripts das camadas também podem ser executados separadamente:
+
+```bash
+python extracao_bronze.py 01001000
+python processamento_silver.py
+python processamento_gold.py
+```
+
+## Testes
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Os testes não acessam a internet nem alteram o datalake do projeto. Eles usam
+diretórios temporários e simulam a resposta do ViaCEP.
+
+## Estrutura das saídas
+
+```text
+datalake/
+├── bronze/  # uma resposta JSON bruta por consulta
+├── silver/  # JSON por CEP + consolidado_ceps.csv
+└── gold/    # relatório completo + distribuições por dimensão
+```
+
+Este projeto tem finalidade educacional e de portfólio. O servidor foi pensado
+para execução local, não para exposição direta em produção.

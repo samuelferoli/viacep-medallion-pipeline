@@ -32,9 +32,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Dados gerados pelo pipeline (bronze/silver/gold são derivados, não fonte)
-# Mantenha as pastas no repo, não o conteúdo transiente. Descomente para ignorar
-# a saída das execuções locais:
+# O repositório mantém uma amostra pequena do datalake para demonstração.
+# Em um uso real, ignore os padrões abaixo e versione apenas fixtures anônimas:
 # datalake/bronze/*.json
 # datalake/silver/*.json
 # datalake/silver/*.csv

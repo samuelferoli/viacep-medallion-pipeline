@@ -1,123 +1,137 @@
-import os
-import json
+"""Limpa e consolida os dados da camada Bronze na camada Silver."""
+
+from __future__ import annotations
+
 import csv
+import json
+import re
 from datetime import datetime
-import glob
+from pathlib import Path
+from typing import Any
 
-# 1. Definir caminhos das pastas do Data Lake
-PASTA_BRONZE = "./datalake/bronze/"
-PASTA_SILVER = "./datalake/silver/"
 
-# Garantir que a pasta Silver existe
-os.makedirs(PASTA_SILVER, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+PASTA_BRONZE = BASE_DIR / "datalake" / "bronze"
+PASTA_SILVER = BASE_DIR / "datalake" / "silver"
+PADRAO_ARQUIVO_BRONZE = re.compile(
+    r"^dados_cep_(\d{8}_\d{6})(?:_(\d{6}))?\.json$"
+)
 
-def extrair_data_arquivo(nome_arquivo):
-    """Extrai a data e hora do nome do arquivo bronze (ex: dados_cep_20260702_142537.json)"""
-    try:
-        # Pega a parte '20260702_142537'
-        partes = os.path.basename(nome_arquivo).replace(".json", "").split("_")
-        data_str = f"{partes[2]}_{partes[3]}"
-        return datetime.strptime(data_str, "%Y%m%d_%H%M%S")
-    except Exception:
-        # Se falhar, retorna uma data antiga
-        return datetime.min
 
-def limpar_e_padronizar(dados, arquivo_origem, data_extracao):
-    """Limpa e padroniza os campos do CEP"""
-    # 1. Limpeza do CEP (remover hífen e espaços)
-    cep_limpo = dados.get("cep", "").replace("-", "").strip()
-    
-    # 2. Padronização de campos nulos/vazios (converter "" para None)
-    dados_limpos = {}
+def extrair_data_arquivo(nome_arquivo: str | Path) -> datetime:
+    """Extrai o timestamp de um nome de arquivo Bronze."""
+    correspondencia = PADRAO_ARQUIVO_BRONZE.fullmatch(Path(nome_arquivo).name)
+    if not correspondencia:
+        raise ValueError(f"Nome de arquivo Bronze inválido: {Path(nome_arquivo).name}")
+
+    data_hora, microssegundos = correspondencia.groups()
+    formato = "%Y%m%d_%H%M%S_%f" if microssegundos else "%Y%m%d_%H%M%S"
+    valor = f"{data_hora}_{microssegundos}" if microssegundos else data_hora
+    return datetime.strptime(valor, formato)
+
+
+def limpar_e_padronizar(
+    dados: dict[str, Any], arquivo_origem: str | Path, data_extracao: datetime
+) -> dict[str, Any]:
+    """Remove espaços, normaliza valores vazios e adiciona linhagem."""
+    dados_limpos: dict[str, Any] = {}
     for chave, valor in dados.items():
         if isinstance(valor, str):
-            valor_limpo = valor.strip()
-            dados_limpos[chave] = valor_limpo if valor_limpo != "" else None
+            valor = valor.strip()
+            dados_limpos[chave] = valor or None
         else:
             dados_limpos[chave] = valor
 
-    # Atualiza com o CEP limpo
-    dados_limpos["cep"] = cep_limpo
-    
-    # 3. Adicionar metadados da engenharia de dados (linhagem do dado)
-    dados_limpos["metadata_arquivo_origem"] = os.path.basename(arquivo_origem)
-    dados_limpos["metadata_data_extracao"] = data_extracao.strftime("%Y-%m-%d %H:%M:%S")
-    dados_limpos["metadata_data_processamento"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+    cep = str(dados.get("cep") or "").replace("-", "").strip()
+    if not re.fullmatch(r"\d{8}", cep):
+        raise ValueError("registro sem um CEP válido")
+
+    dados_limpos["cep"] = cep
+    dados_limpos["metadata_arquivo_origem"] = Path(arquivo_origem).name
+    dados_limpos["metadata_data_extracao"] = data_extracao.isoformat(sep=" ")
+    dados_limpos["metadata_data_processamento"] = datetime.now().isoformat(
+        sep=" ", timespec="seconds"
+    )
     return dados_limpos
 
-def processar_camada_silver():
+
+def _cabecalhos_consolidados(registros: list[dict[str, Any]]) -> list[str]:
+    """Obtém a união estável de campos para suportar mudanças no schema da API."""
+    cabecalhos: list[str] = []
+    for registro in registros:
+        for chave in registro:
+            if chave not in cabecalhos:
+                cabecalhos.append(chave)
+    return cabecalhos
+
+
+def processar_camada_silver(
+    pasta_bronze: Path = PASTA_BRONZE,
+    pasta_silver: Path = PASTA_SILVER,
+) -> int:
+    """Processa toda a Bronze e mantém o registro mais recente de cada CEP."""
     print("Iniciando processamento da Camada Silver...")
-    
-    # Procurar todos os arquivos JSON na pasta Bronze
-    arquivos_bronze = glob.glob(os.path.join(PASTA_BRONZE, "dados_cep_*.json"))
-    
+    arquivos_bronze = sorted(pasta_bronze.glob("dados_cep_*.json"))
     if not arquivos_bronze:
         print("Nenhum arquivo encontrado na camada Bronze para processar.")
-        return
-        
+        return 0
+
     print(f"Encontrados {len(arquivos_bronze)} arquivos na camada Bronze.")
-    
-    # Dicionário para guardar o CEP mais recente (Deduplicação)
-    # Chave: CEP, Valor: (dados_processados, data_extracao)
-    ceps_unicos = {}
-    
+    ceps_unicos: dict[str, tuple[dict[str, Any], datetime]] = {}
+
     for caminho_arquivo in arquivos_bronze:
         try:
             data_extracao = extrair_data_arquivo(caminho_arquivo)
-            
-            with open(caminho_arquivo, "r", encoding="utf-8") as f:
-                dados_brutos = json.load(f)
-            
-            # Se a resposta do ViaCEP veio com erro (ex: {"erro": "true"}), ignoramos
-            if dados_brutos.get("erro") == "true" or dados_brutos.get("erro") is True:
-                print(f"Ignorando arquivo {os.path.basename(caminho_arquivo)} pois contém dados de CEP inválido/erro.")
+            dados_brutos = json.loads(caminho_arquivo.read_text(encoding="utf-8"))
+            if not isinstance(dados_brutos, dict):
+                raise ValueError("o JSON raiz não é um objeto")
+            if dados_brutos.get("erro") is True or dados_brutos.get("erro") == "true":
+                print(f"Ignorando {caminho_arquivo.name}: resposta de CEP inválido.")
                 continue
-                
-            dados_processados = limpar_e_padronizar(dados_brutos, caminho_arquivo, data_extracao)
-            cep = dados_processados["cep"]
-            
-            # Se o CEP já foi visto, mantemos apenas o mais recente
-            if cep in ceps_unicos:
-                _, data_anterior = ceps_unicos[cep]
-                if data_extracao > data_anterior:
-                    ceps_unicos[cep] = (dados_processados, data_extracao)
-            else:
-                ceps_unicos[cep] = (dados_processados, data_extracao)
-                
-        except Exception as e:
-            print(f"Erro ao processar o arquivo {caminho_arquivo}: {e}")
-            
-    # Salvar os dados processados na camada Silver
-    total_salvos = 0
-    lista_consolidada = []
-    
-    for cep, (dados_limpos, _) in ceps_unicos.items():
-        # Salvar arquivo JSON individual por CEP na camada Silver
-        nome_arquivo_silver = f"cep_{cep}.json"
-        caminho_silver = os.path.join(PASTA_SILVER, nome_arquivo_silver)
-        
-        with open(caminho_silver, "w", encoding="utf-8") as f:
-            json.dump(dados_limpos, f, ensure_ascii=False, indent=4)
-            
-        lista_consolidada.append(dados_limpos)
-        total_salvos += 1
-        print(f"CEP {cep} processado e salvo em: {caminho_silver}")
 
-    # Criar arquivo CSV consolidado para fácil análise/leitura
-    if lista_consolidada:
-        caminho_csv = os.path.join(PASTA_SILVER, "consolidado_ceps.csv")
-        # Obter cabeçalhos das chaves do dicionário
-        cabecalhos = lista_consolidada[0].keys()
-        
-        with open(caminho_csv, "w", encoding="utf-8", newline="") as f:
-            escritor = csv.DictWriter(f, fieldnames=cabecalhos)
-            escritor.writeheader()
-            escritor.writerows(lista_consolidada)
-            
-        print(f"Arquivo CSV consolidado gerado com sucesso em: {caminho_csv}")
-        
-    print(f"Processamento concluído. {total_salvos} CEP(s) únicos salvos na camada Silver.")
+            dados_processados = limpar_e_padronizar(
+                dados_brutos, caminho_arquivo, data_extracao
+            )
+            cep = dados_processados["cep"]
+            anterior = ceps_unicos.get(cep)
+            if anterior is None or data_extracao > anterior[1]:
+                ceps_unicos[cep] = (dados_processados, data_extracao)
+        except (OSError, json.JSONDecodeError, ValueError) as erro:
+            print(f"Ignorando {caminho_arquivo.name}: {erro}.")
+
+    if not ceps_unicos:
+        print("Nenhum registro válido foi encontrado na camada Bronze.")
+        return 0
+
+    pasta_silver.mkdir(parents=True, exist_ok=True)
+    registros = [ceps_unicos[cep][0] for cep in sorted(ceps_unicos)]
+
+    for dados_limpos in registros:
+        caminho_silver = pasta_silver / f"cep_{dados_limpos['cep']}.json"
+        caminho_silver.write_text(
+            json.dumps(dados_limpos, ensure_ascii=False, indent=4), encoding="utf-8"
+        )
+
+    nomes_esperados = {f"cep_{registro['cep']}.json" for registro in registros}
+    for arquivo_antigo in pasta_silver.glob("cep_*.json"):
+        if arquivo_antigo.name not in nomes_esperados:
+            arquivo_antigo.unlink()
+
+    caminho_csv = pasta_silver / "consolidado_ceps.csv"
+    with caminho_csv.open("w", encoding="utf-8", newline="") as arquivo_csv:
+        escritor = csv.DictWriter(
+            arquivo_csv, fieldnames=_cabecalhos_consolidados(registros)
+        )
+        escritor.writeheader()
+        escritor.writerows(registros)
+
+    print(f"Processamento concluído. {len(registros)} CEP(s) únicos salvos na Silver.")
+    return len(registros)
+
+
+def main() -> int:
+    return 0 if processar_camada_silver() > 0 else 1
+
 
 if __name__ == "__main__":
-    processar_camada_silver()
+    raise SystemExit(main())

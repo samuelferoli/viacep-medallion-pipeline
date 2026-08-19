@@ -549,6 +549,7 @@
                 await carregarDadosDashboard();
             } catch (err) {
                 console.error("Erro ao carregar dados do dashboard:", err);
+                exibirErro("Não foi possível carregar os dados. Execute o pipeline e atualize a página.");
             } finally {
                 // Esconder loader com transição suave
                 const loader = document.getElementById('loader');
@@ -560,12 +561,10 @@
         // Buscar dados das camadas Silver e Gold
         async function carregarDadosDashboard() {
             // 1. Carregar métricas Gold
-            const respGold = await fetch('/datalake/gold/relatorio_metricas.json');
-            const dataGold = await respGold.json();
+            const dataGold = await buscarJSON('/datalake/gold/relatorio_metricas.json');
 
             // 2. Carregar arquivo Silver CSV para a tabela
-            const respSilver = await fetch('/datalake/silver/consolidado_ceps.csv');
-            const csvTexto = await respSilver.text();
+            const csvTexto = await buscarTexto('/datalake/silver/consolidado_ceps.csv');
             
             dadosCepsGlobal = parseCSV(csvTexto);
 
@@ -575,12 +574,39 @@
             renderizarTabela(dadosCepsGlobal);
         }
 
+        async function buscarJSON(url) {
+            const resposta = await fetch(url);
+            if (!resposta.ok) throw new Error(`Falha HTTP ${resposta.status} ao buscar ${url}`);
+            return resposta.json();
+        }
+
+        async function buscarTexto(url) {
+            const resposta = await fetch(url);
+            if (!resposta.ok) throw new Error(`Falha HTTP ${resposta.status} ao buscar ${url}`);
+            return resposta.text();
+        }
+
+        function exibirErro(mensagem) {
+            document.getElementById('metric-total').innerText = '—';
+            document.getElementById('metric-uf').innerText = '—';
+            document.getElementById('metric-regiao').innerText = '—';
+            const tbody = document.getElementById('table-body');
+            const linha = document.createElement('tr');
+            const celula = document.createElement('td');
+            celula.colSpan = 7;
+            celula.style.textAlign = 'center';
+            celula.style.color = '#f87171';
+            celula.textContent = mensagem;
+            linha.appendChild(celula);
+            tbody.replaceChildren(linha);
+        }
+
         // Parse simples de CSV
         function parseCSV(text) {
             const linhas = text.split('\n').filter(l => l.trim() !== '');
             if (linhas.length <= 1) return [];
             
-            const cabecalhos = linhas[0].split(',');
+            const cabecalhos = parseLinhaCSV(linhas[0]);
             const resultados = [];
 
             for (let i = 1; i < linhas.length; i++) {
@@ -604,7 +630,10 @@
             
             for (let i = 0; i < linha.length; i++) {
                 const char = linha[i];
-                if (char === '"') {
+                if (char === '"' && emAspas && linha[i + 1] === '"') {
+                    campoAtual += '"';
+                    i++;
+                } else if (char === '"') {
                     emAspas = !emAspas;
                 } else if (char === ',' && !emAspas) {
                     resultado.push(campoAtual);
@@ -705,31 +734,62 @@
         // Renderiza a tabela da camada Silver
         function renderizarTabela(dados) {
             const tbody = document.getElementById('table-body');
-            tbody.innerHTML = '';
+            tbody.replaceChildren();
 
             if (dados.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Nenhum CEP encontrado.</td></tr>`;
+                const linha = document.createElement('tr');
+                const celula = document.createElement('td');
+                celula.colSpan = 7;
+                celula.style.textAlign = 'center';
+                celula.style.color = 'var(--text-muted)';
+                celula.textContent = 'Nenhum CEP encontrado.';
+                linha.appendChild(celula);
+                tbody.appendChild(linha);
                 return;
             }
 
             dados.forEach(cep => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td style="font-weight: 600; color: #fff;">${formatarCEP(cep.cep)}</td>
-                    <td>${cep.logradouro || '-'}</td>
-                    <td>${cep.bairro || '-'}</td>
-                    <td>${cep.localidade || '-'}</td>
-                    <td><span class="badge badge-uf">${cep.uf}</span></td>
-                    <td><span class="badge badge-regiao">${cep.regiao}</span></td>
-                    <td>
-                        <button class="action-icon" title="Ver JSON completo" onclick="abrirModal('${cep.cep}')">👁️‍🗨️</button>
-                    </td>
-                `;
+                const valores = [
+                    formatarCEP(cep.cep),
+                    cep.logradouro || '-',
+                    cep.bairro || '-',
+                    cep.localidade || '-'
+                ];
+                valores.forEach((valor, indice) => {
+                    const td = document.createElement('td');
+                    td.textContent = valor;
+                    if (indice === 0) {
+                        td.style.fontWeight = '600';
+                        td.style.color = '#fff';
+                    }
+                    tr.appendChild(td);
+                });
+
+                [['badge badge-uf', cep.uf], ['badge badge-regiao', cep.regiao]].forEach(([classe, valor]) => {
+                    const td = document.createElement('td');
+                    const badge = document.createElement('span');
+                    badge.className = classe;
+                    badge.textContent = valor || '-';
+                    td.appendChild(badge);
+                    tr.appendChild(td);
+                });
+
+                const tdAcao = document.createElement('td');
+                const botao = document.createElement('button');
+                botao.className = 'action-icon';
+                botao.title = 'Ver JSON completo';
+                botao.type = 'button';
+                botao.textContent = '👁️‍🗨️';
+                botao.addEventListener('click', () => abrirModal(cep.cep));
+                tdAcao.appendChild(botao);
+                tr.appendChild(tdAcao);
                 tbody.appendChild(tr);
             });
         }
 
         function formatarCEP(cep) {
+            cep = String(cep || '');
             if (cep.length === 8) {
                 return cep.substring(0, 5) + '-' + cep.substring(5);
             }
@@ -763,8 +823,8 @@
             modal.style.display = 'flex';
 
             try {
-                const resp = await fetch(`/datalake/silver/cep_${cepCodigo}.json`);
-                const data = await resp.json();
+                if (!/^\d{8}$/.test(cepCodigo)) throw new Error('CEP inválido');
+                const data = await buscarJSON(`/datalake/silver/cep_${cepCodigo}.json`);
                 viewer.innerText = JSON.stringify(data, null, 4);
             } catch (err) {
                 viewer.innerText = "Erro ao buscar detalhes do CEP na camada Silver.";
