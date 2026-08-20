@@ -6,7 +6,8 @@ deduplicação, calcula métricas analíticas e disponibiliza um dashboard local
 
 <img width="1902" height="912" alt="image" src="https://github.com/user-attachments/assets/b6f57b04-4e95-4984-a98a-6df23a7d830a" />
 
-<img width="1890" height="914" alt="image" src="https://github.com/user-attachments/assets/8ece2f82-0f59-4786-800d-b862d6d0d894" />
+<img width="1892" height="543" alt="image" src="https://github.com/user-attachments/assets/770d6927-6648-46c6-9d14-c2d6a17b3d48" />
+
 
 
 ## Arquitetura
